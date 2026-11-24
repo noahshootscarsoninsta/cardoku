@@ -182,7 +182,9 @@
 
 <script>
 (() => {
-  const ZONE_COLORS = ['#f5c6a5','#c5dcb0','#f7e3a3','#eab3b8','#b9d3ea','#d4c3ea','#a9d8cc','#e5a58c','#e6dccb','#f0c9e3'];
+  // Ordered so the first few (used on small boards) are as different as possible.
+  // rose, butter, sky, mint, lilac, peach, stone, periwinkle, lime, pink
+  const ZONE_COLORS = ['#f2a7ad','#f6e58d','#9fcfee','#9fdcc0','#dcb4ee','#f8c99b','#d9d2c5','#b4b6f0','#c9e69a','#f5b8dc'];
   const PHOTOS = ['car1.jpg', 'car2.jpg'];
   const MAX_HEARTS = 3;
   const $ = id => document.getElementById(id);
@@ -202,27 +204,31 @@
 
   // ---------- Level design ----------
   // Very gentle start, then size and difficulty creep up slowly. Tiers:
-  // 0 easy, 1 chill, 2 tricky, 3 tough. Every 10th level is a big HARD MODE.
-  // Levels 1-15 auto-fill ✕s around each car you park ("training wheels").
-  const ASSIST_UNTIL = 15;
+  // -1 "zones only": every move is just "this colour zone has one square left"
+  //  0 easy (rows/columns with one square left too), 1 chill, 2 tricky, 3 tough.
+  // Early levels also get tiny one-square zones = free cars to start you off.
+  // Every 10th level is a bigger HARD MODE.
   function levelPlan(L) {
     const r = mulberry32(L * 7919 + 17);
     const isBoss = L % 10 === 0;
-    let size = L <= 3 ? 4 : L <= 12 ? 5 : L <= 25 ? 6 : L <= 45 ? 7 : 8;
-    if (L > 60 && r() < Math.min(0.4, (L - 60) / 80)) size = 9;     // occasional 9 much later
+    let size = L <= 4 ? 4 : L <= 14 ? 5 : L <= 30 ? 6 : L <= 50 ? 7 : 8;
+    if (L > 70 && r() < Math.min(0.4, (L - 70) / 80)) size = 9;     // occasional 9 much later
     if (!isBoss && size > 5 && r() < 0.18) size--;                  // breather level
-    let tier;
+    let tier, tiny;
     if (isBoss) {
-      size = L < 20 ? 6 : L < 30 ? 7 : L < 50 ? 8 : L < 70 ? 9 : 10;
-      tier = L < 20 ? 2 : 3;
+      size = L < 20 ? 6 : L < 40 ? 7 : L < 60 ? 8 : L < 80 ? 9 : 10;
+      tier = L < 20 ? 0 : L < 30 ? 1 : L < 40 ? 2 : 3;
+      tiny = 0;
     } else {
-      const p3 = L < 30 ? 0 : Math.min(0.35, (L - 30) / 100);
-      const p2 = L < 15 ? 0 : Math.min(0.4, (L - 15) / 60);
-      const p1 = L < 6 ? 0 : Math.min(0.5, (L - 5) / 30);
+      const p3 = L < 45 ? 0 : Math.min(0.3, (L - 45) / 100);
+      const p2 = L < 30 ? 0 : Math.min(0.35, (L - 30) / 70);
+      const p1 = L < 20 ? 0 : Math.min(0.45, (L - 20) / 40);
+      const p0 = L < 9 ? 0 : Math.min(0.6, (L - 8) / 15);
       const x = r();
-      tier = x < p3 ? 3 : x < p3 + p2 ? 2 : x < p3 + p2 + p1 ? 1 : 0;
+      tier = x < p3 ? 3 : x < p3 + p2 ? 2 : x < p3 + p2 + p1 ? 1 : x < p3 + p2 + p1 + p0 ? 0 : -1;
+      tiny = L <= 6 ? 2 : L <= 20 ? 1 : 0;
     }
-    return { size, tier, isBoss, assist: L <= ASSIST_UNTIL };
+    return { size, tier, tiny, isBoss };
   }
 
   // ---------- Puzzle generation ----------
@@ -241,19 +247,24 @@
     return cols;
   }
 
-  function growRegions(n, sol) {
+  // `tiny` zones stay a single square (a free car for the player).
+  function growRegions(n, sol, tiny = 0) {
     const g = Array.from({ length: n }, () => new Array(n).fill(-1));
     sol.forEach((c, r) => g[r][c] = r);
+    const frozen = new Set(shuffle([...Array(n).keys()]).slice(0, tiny));
     for (let left = n * n - n; left > 0; left--) {
-      const frontier = [];
-      for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
-        if (g[r][c] !== -1) continue;
-        const nb = [];
-        for (const [dr, dc] of DIRS4) {
-          const rr = r + dr, cc = c + dc;
-          if (rr >= 0 && rr < n && cc >= 0 && cc < n && g[rr][cc] !== -1) nb.push(g[rr][cc]);
+      let frontier = [];
+      for (const allowFrozen of [false, true]) {
+        for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+          if (g[r][c] !== -1) continue;
+          const nb = [];
+          for (const [dr, dc] of DIRS4) {
+            const rr = r + dr, cc = c + dc;
+            if (rr >= 0 && rr < n && cc >= 0 && cc < n && g[rr][cc] !== -1 && (allowFrozen || !frozen.has(g[rr][cc]))) nb.push(g[rr][cc]);
+          }
+          if (nb.length) frontier.push([r, c, nb]);
         }
-        if (nb.length) frontier.push([r, c, nb]);
+        if (frontier.length) break;
       }
       const [r, c, nb] = frontier[ri(frontier.length)];
       g[r][c] = nb[ri(nb.length)];
@@ -339,14 +350,16 @@
     const place = (r, c) => { for (const [a, b] of kills(r, c)) cand[a][b] = false; car[r][c] = true; cand[r][c] = false; };
     const open = gr => gr.filter(([r, c]) => cand[r][c]);
     const filled = gr => gr.some(([r, c]) => car[r][c]);
-    let placed = 0, tier = 0;
+    let placed = 0, tier = -1;
     while (placed < n) {
       let progress = false;
-      // rule 1: a row/column/zone with only one spot left
-      for (const gr of groups) {
+      // rule 1: a zone (easiest to see), then a row/column, with only one spot left
+      const order = [...groups.slice(2 * n), ...groups.slice(0, 2 * n)];
+      for (let gi = 0; gi < order.length; gi++) {
+        const gr = order[gi];
         if (filled(gr)) continue;
         const o = open(gr);
-        if (o.length === 1) { place(...o[0]); placed++; progress = true; break; }
+        if (o.length === 1) { place(...o[0]); placed++; progress = true; if (gi >= n) tier = Math.max(tier, 0); break; }
       }
       if (progress) continue;
       // rule 1b: a group's spots all lie inside another group -> clear the rest of that other group
@@ -386,7 +399,7 @@
     let best = null;
     for (let attempt = 0; attempt < 120; attempt++) {
       const sol = randomSolution(plan.size);
-      const g = growRegions(plan.size, sol);
+      const g = growRegions(plan.size, sol, plan.tiny);
       if (!makeUnique(plan.size, g, sol)) continue;
       const t = rate(plan.size, g);
       // if we can't hit the target exactly, miss on the easy side (hard side for bosses)
@@ -395,7 +408,7 @@
       if (!best || score < best.score) best = { g, sol, tier: t, score };
       if (score === 0) break;
     }
-    const colors = shuffle(ZONE_COLORS.slice());
+    const colors = shuffle(ZONE_COLORS.slice(0, plan.size));
     return { ...plan, regions: best.g, solution: best.sol, actualTier: best.tier, colors };
   }
 
@@ -414,11 +427,9 @@
       document.querySelector('meta[name=theme-color]').content = current.isBoss ? '#2a2236' : '#f6eee2';
       $('levelPill').textContent = `Level ${level}`;
       const tag = $('tag');
-      const t = current.isBoss ? ['boss', '🌙 Hard mode'] : [['easy', 'easy'], ['chill', 'chill'], ['tricky', 'tricky'], ['tough', 'tough']][current.actualTier];
+      const t = current.isBoss ? ['boss', '🌙 Hard mode'] : [['easy', 'easy'], ['easy', 'easy'], ['chill', 'chill'], ['tricky', 'tricky'], ['tough', 'tough']][current.actualTier + 1];
       tag.className = 'tag ' + t[0]; tag.textContent = t[1];
-      $('assist').textContent = current.assist
-        ? (level === ASSIST_UNTIL ? '🛞 Last level with training wheels: ✕s fill in for you' : '🛞 Training wheels on: ✕s fill in around your cars')
-        : (level === ASSIST_UNTIL + 1 ? 'Training wheels off! You place every ✕ yourself now 💪' : '');
+      $('assist').textContent = level <= 3 ? 'Tip: a zone with just one square must have a car in it 🚗' : '';
       buildBoard(); render(); renderHearts();
       $('boardwrap').classList.remove('loading');
     }, 30);
@@ -493,20 +504,7 @@
 
   // Placing a car on a square that isn't part of the answer = crash.
   function tryCar(r, c) {
-    if (solution[r] === c) {
-      const start = history.length;
-      set(r, c, 2);
-      if (current.assist) {
-        // training wheels: ✕ every square this car rules out
-        for (let rr = 0; rr < n; rr++) for (let cc = 0; cc < n; cc++) {
-          if (state[rr][cc] !== 0) continue;
-          if (rr === r || cc === c || regions[rr][cc] === regions[r][c] || (Math.abs(rr - r) <= 1 && Math.abs(cc - c) <= 1)) set(rr, cc, 1);
-        }
-        const steps = history.splice(start);
-        if (steps.length) history.push({ group: steps });
-      }
-      return;
-    }
+    if (solution[r] === c) { set(r, c, 2); return; }
     const d = cells[r][c];
     d.dataset.crashing = '1';
     d.innerHTML = '<img class="crash" src="car.png" alt="">';
