@@ -2,7 +2,8 @@
 
 Park one car in every row, column and colour zone. Cars can't touch, not even at the corners.
 
-- Endless levels that slowly get harder. Some are chill, some are tough.
+- Endless levels. It starts on tiny 4×4 boards and gets harder very slowly. Some levels are easy, some are tough.
+- Levels 1–15 have training wheels: parking a car fills in the ✕s for you.
 - Every 10th level is a big **HARD MODE**.
 - You get 3 hearts. A wrong car costs one. Lose them all and you restart the same level.
 - Tap once for ✕, twice for a car. Drag to mark lots of ✕s.

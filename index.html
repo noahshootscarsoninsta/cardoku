@@ -55,7 +55,9 @@
   .levelbar { width: 100%; max-width: 520px; display: flex; align-items: center; justify-content: space-between; margin: 12px 0 10px; }
   .pill { background: var(--panel); box-shadow: var(--shadow); border-radius: 999px; padding: 8px 16px; font-weight: 800; font-size: 17px; }
   .tag { border-radius: 999px; padding: 6px 12px; font-size: 13px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; }
+  .tag.easy { background: #d3e8f5; color: #2c5d7c; }
   .tag.chill { background: #d9ead0; color: #3f6b35; }
+  .assist { min-height: 18px; margin-top: 12px; font-size: 13px; font-weight: 700; color: var(--muted); text-align: center; }
   .tag.tricky { background: #f7e3a3; color: #7a5b12; }
   .tag.tough { background: #f3c1a8; color: #8a3b1c; }
   .tag.boss { background: #ff7aa8; color: #2a2236; animation: glow 1.6s ease-in-out infinite; }
@@ -146,6 +148,8 @@
   <div class="loadmsg">Warming up the engine…</div>
 </div>
 
+<div class="assist" id="assist"></div>
+
 <div class="controls">
   <button class="btn" id="undo">Undo</button>
   <button class="btn" id="clear">Clear</button>
@@ -197,27 +201,28 @@
   function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = ri(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
   // ---------- Level design ----------
-  // Size creeps up slowly; difficulty tier varies level to level, with harder
-  // tiers getting more likely over time. Every 10th level is a big HARD MODE.
+  // Very gentle start, then size and difficulty creep up slowly. Tiers:
+  // 0 easy, 1 chill, 2 tricky, 3 tough. Every 10th level is a big HARD MODE.
+  // Levels 1-15 auto-fill ✕s around each car you park ("training wheels").
+  const ASSIST_UNTIL = 15;
   function levelPlan(L) {
     const r = mulberry32(L * 7919 + 17);
     const isBoss = L % 10 === 0;
-    let size = Math.min(8, 5 + Math.floor((L - 1) / 8));          // 5 → 8
-    if (L > 40 && r() < Math.min(0.4, (L - 40) / 60)) size = 9;     // occasional 9 later on
+    let size = L <= 3 ? 4 : L <= 12 ? 5 : L <= 25 ? 6 : L <= 45 ? 7 : 8;
+    if (L > 60 && r() < Math.min(0.4, (L - 60) / 80)) size = 9;     // occasional 9 much later
     if (!isBoss && size > 5 && r() < 0.18) size--;                  // breather level
     let tier;
     if (isBoss) {
-      size = Math.min(10, 8 + Math.floor(L / 30));                  // 8, 8, 9, 9, 9, 10…
-      tier = 3;
-    } else if (L <= 3) {
-      tier = 1;                                                     // gentle start
+      size = L < 20 ? 6 : L < 30 ? 7 : L < 50 ? 8 : L < 70 ? 9 : 10;
+      tier = L < 20 ? 2 : 3;
     } else {
-      const pHard = Math.min(0.4, (L - 8) / 100);
-      const pMed = Math.min(0.5, 0.1 + L / 60);
+      const p3 = L < 30 ? 0 : Math.min(0.35, (L - 30) / 100);
+      const p2 = L < 15 ? 0 : Math.min(0.4, (L - 15) / 60);
+      const p1 = L < 6 ? 0 : Math.min(0.5, (L - 5) / 30);
       const x = r();
-      tier = x < pHard ? 3 : x < pHard + pMed ? 2 : 1;
+      tier = x < p3 ? 3 : x < p3 + p2 ? 2 : x < p3 + p2 + p1 ? 1 : 0;
     }
-    return { size, tier, isBoss };
+    return { size, tier, isBoss, assist: L <= ASSIST_UNTIL };
   }
 
   // ---------- Puzzle generation ----------
@@ -334,7 +339,7 @@
     const place = (r, c) => { for (const [a, b] of kills(r, c)) cand[a][b] = false; car[r][c] = true; cand[r][c] = false; };
     const open = gr => gr.filter(([r, c]) => cand[r][c]);
     const filled = gr => gr.some(([r, c]) => car[r][c]);
-    let placed = 0, tier = 1;
+    let placed = 0, tier = 0;
     while (placed < n) {
       let progress = false;
       // rule 1: a row/column/zone with only one spot left
@@ -352,7 +357,7 @@
           if (other === gr || filled(other)) continue;
           if (!o.every(([r, c]) => other.some(([a, b]) => a === r && b === c))) continue;
           for (const [a, b] of open(other)) {
-            if (!o.some(([r, c]) => r === a && c === b)) { cand[a][b] = false; progress = true; }
+            if (!o.some(([r, c]) => r === a && c === b)) { cand[a][b] = false; progress = true; tier = Math.max(tier, 1); }
           }
         }
         if (progress) break;
@@ -379,12 +384,14 @@
     const plan = levelPlan(L);
     rand = mulberry32(L * 104729 + 7);
     let best = null;
-    for (let attempt = 0; attempt < 40; attempt++) {
+    for (let attempt = 0; attempt < 120; attempt++) {
       const sol = randomSolution(plan.size);
       const g = growRegions(plan.size, sol);
       if (!makeUnique(plan.size, g, sol)) continue;
       const t = rate(plan.size, g);
-      const score = Math.abs(t - plan.tier);
+      // if we can't hit the target exactly, miss on the easy side (hard side for bosses)
+      const over = t - plan.tier;
+      const score = plan.isBoss ? (over < 0 ? -over * 1.5 : over) : (over > 0 ? over * 1.5 : -over);
       if (!best || score < best.score) best = { g, sol, tier: t, score };
       if (score === 0) break;
     }
@@ -407,8 +414,11 @@
       document.querySelector('meta[name=theme-color]').content = current.isBoss ? '#2a2236' : '#f6eee2';
       $('levelPill').textContent = `Level ${level}`;
       const tag = $('tag');
-      const t = current.isBoss ? ['boss', '🌙 Hard mode'] : [['chill', 'chill'], ['tricky', 'tricky'], ['tough', 'tough']][current.actualTier - 1];
+      const t = current.isBoss ? ['boss', '🌙 Hard mode'] : [['easy', 'easy'], ['chill', 'chill'], ['tricky', 'tricky'], ['tough', 'tough']][current.actualTier];
       tag.className = 'tag ' + t[0]; tag.textContent = t[1];
+      $('assist').textContent = current.assist
+        ? (level === ASSIST_UNTIL ? '🛞 Last level with training wheels: ✕s fill in for you' : '🛞 Training wheels on: ✕s fill in around your cars')
+        : (level === ASSIST_UNTIL + 1 ? 'Training wheels off! You place every ✕ yourself now 💪' : '');
       buildBoard(); render(); renderHearts();
       $('boardwrap').classList.remove('loading');
     }, 30);
@@ -483,7 +493,20 @@
 
   // Placing a car on a square that isn't part of the answer = crash.
   function tryCar(r, c) {
-    if (solution[r] === c) { set(r, c, 2); return; }
+    if (solution[r] === c) {
+      const start = history.length;
+      set(r, c, 2);
+      if (current.assist) {
+        // training wheels: ✕ every square this car rules out
+        for (let rr = 0; rr < n; rr++) for (let cc = 0; cc < n; cc++) {
+          if (state[rr][cc] !== 0) continue;
+          if (rr === r || cc === c || regions[rr][cc] === regions[r][c] || (Math.abs(rr - r) <= 1 && Math.abs(cc - c) <= 1)) set(rr, cc, 1);
+        }
+        const steps = history.splice(start);
+        if (steps.length) history.push({ group: steps });
+      }
+      return;
+    }
     const d = cells[r][c];
     d.dataset.crashing = '1';
     d.innerHTML = '<img class="crash" src="car.png" alt="">';
